@@ -151,6 +151,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
   }
 
   .field label {
@@ -178,11 +179,25 @@
     font-size: 14px;
     padding: 11px 8px;
     text-align: left;
+    display: block;
+    min-height: 44px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* iOS Safari renders empty time/date inputs at content width — force them to fill the container */
+  input[type="date"]:not([value=""]),
+  input[type="time"]:not([value=""]),
+  input[type="date"],
+  input[type="time"] {
+    width: 100% !important;
   }
 
   input[type="date"]::-webkit-date-and-time-value,
   input[type="time"]::-webkit-date-and-time-value {
     text-align: left;
+    min-height: 1.2em;
+    width: 100%;
   }
 
   input:focus, select:focus {
@@ -219,6 +234,38 @@
     padding: 8px 12px;
     font-size: 13px;
     width: auto;
+  }
+
+  .shift-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .btn-icon {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    width: auto;
+    transition: all 0.15s;
+  }
+
+  .btn-icon:active { transform: scale(0.95); }
+
+  .btn-icon.edit {
+    color: var(--accent);
+    border-color: rgba(255,179,71,0.3);
+  }
+
+  .btn-icon.delete {
+    color: var(--danger);
+    border-color: rgba(255,122,138,0.3);
   }
 
   .quick-action {
@@ -838,6 +885,35 @@
   </div>
 </div>
 
+<div class="modal-bg" id="editModal">
+  <div class="modal">
+    <h3>Edit Shift</h3>
+    <div class="field" style="margin-bottom: 12px;">
+      <label>Date</label>
+      <input type="date" id="editDate">
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label>Start Time</label>
+        <input type="time" id="editStart">
+      </div>
+      <div class="field">
+        <label>End Time</label>
+        <input type="time" id="editEnd">
+      </div>
+    </div>
+    <div class="quick-action" style="margin-top: 10px; margin-bottom: 0;">
+      <button class="btn btn-secondary" onclick="setEditNow('start')">Start: Now</button>
+      <button class="btn btn-secondary" onclick="setEditNow('end')">End: Now</button>
+    </div>
+    <div id="editPreview" class="hint" style="margin: 10px 0 0;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+      <button class="btn" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-bg" id="confirmModal">
   <div class="modal">
     <h3 id="confirmText">Are you sure?</h3>
@@ -1137,7 +1213,10 @@ function renderList() {
             <span><b>${formatMoney(earnings)}</b></span>
           </div>
         </div>
-        <button class="btn-danger" onclick="confirmDelete('${s.id}')">Delete</button>
+        <div class="shift-actions">
+          <button class="btn-icon edit" onclick="openEditModal('${s.id}')">Edit</button>
+          <button class="btn-icon delete" onclick="confirmDelete('${s.id}')">Delete</button>
+        </div>
       </div>`;
   }).join('');
 }
@@ -1153,6 +1232,89 @@ function confirmDelete(id) {
     renderList();
     showToast('Deleted', 'success');
   });
+}
+
+// ============= EDIT SHIFT =============
+let editingId = null;
+
+function openEditModal(id) {
+  const shift = shifts.find(s => s.id === id);
+  if (!shift) return;
+  editingId = id;
+  document.getElementById('editDate').value = shift.date;
+  document.getElementById('editStart').value = shift.start;
+  document.getElementById('editEnd').value = shift.end;
+  updateEditPreview();
+  document.getElementById('editModal').classList.add('show');
+}
+
+function closeEditModal() {
+  document.getElementById('editModal').classList.remove('show');
+  editingId = null;
+}
+
+function setEditNow(field) {
+  const id = field === 'start' ? 'editStart' : 'editEnd';
+  document.getElementById(id).value = nowTimeString();
+  if (!document.getElementById('editDate').value) {
+    document.getElementById('editDate').value = todayString();
+  }
+  updateEditPreview();
+}
+
+function updateEditPreview() {
+  const start = document.getElementById('editStart').value;
+  const end = document.getElementById('editEnd').value;
+  const preview = document.getElementById('editPreview');
+  if (start && end) {
+    const h = calcHours(start, end);
+    let txt = formatHours(h);
+    if (hourlyRate) {
+      txt += ' • ' + formatMoney(h * hourlyRate);
+    }
+    preview.textContent = txt;
+  } else {
+    preview.textContent = '';
+  }
+}
+
+function saveEdit() {
+  if (!editingId) return;
+  const date = document.getElementById('editDate').value;
+  const start = document.getElementById('editStart').value;
+  const end = document.getElementById('editEnd').value;
+
+  if (!date || !start || !end) {
+    showToast('Fill in date and times', 'error');
+    return;
+  }
+
+  const hours = calcHours(start, end);
+  if (hours <= 0) {
+    showToast('Invalid time range', 'error');
+    return;
+  }
+
+  const idx = shifts.findIndex(s => s.id === editingId);
+  if (idx === -1) return;
+
+  const original = { ...shifts[idx] };
+  shifts[idx] = { ...shifts[idx], date, start, end, hours };
+  shifts.sort((a, b) => {
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+    return b.start.localeCompare(a.start);
+  });
+
+  if (!persistShifts()) {
+    // rollback
+    const rIdx = shifts.findIndex(s => s.id === editingId);
+    if (rIdx !== -1) shifts[rIdx] = original;
+    return;
+  }
+
+  closeEditModal();
+  renderList();
+  showToast('Shift updated ✓', 'success');
 }
 
 // ============= REPORT =============
@@ -1572,12 +1734,17 @@ function setQuickRange(type) {
 
 document.getElementById('startTime').addEventListener('change', updatePreview);
 document.getElementById('endTime').addEventListener('change', updatePreview);
+document.getElementById('editStart').addEventListener('change', updateEditPreview);
+document.getElementById('editEnd').addEventListener('change', updateEditPreview);
 
 document.getElementById('rateModal').addEventListener('click', e => {
   if (e.target.id === 'rateModal') closeRateModal();
 });
 document.getElementById('confirmModal').addEventListener('click', e => {
   if (e.target.id === 'confirmModal') closeConfirm();
+});
+document.getElementById('editModal').addEventListener('click', e => {
+  if (e.target.id === 'editModal') closeEditModal();
 });
 
 // ============= INIT =============
